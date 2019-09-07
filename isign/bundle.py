@@ -27,10 +27,16 @@ log = logging.getLogger(__name__)
 
 def is_info_plist_native(plist):
     """ If an bundle is for native iOS, it has these properties in the Info.plist """
-    return (
-        'CFBundleSupportedPlatforms' in plist and
-        'iPhoneOS' in plist['CFBundleSupportedPlatforms']
-    )
+    if ((not 'CFBundleSupportedPlatforms' in plist) or 
+        ('CFBundleSupportedPlatforms' in plist and
+        'iPhoneOS' in plist['CFBundleSupportedPlatforms'])):
+        res = 1
+        log.error('Bundle is native');
+    else:
+        res = 0
+        log.error('Bundle not native');
+
+    return res
 
 
 class Bundle(object):
@@ -41,7 +47,13 @@ class Bundle(object):
     entitlements_path = None  # Not set for every bundle type
 
     def __init__(self, path):
-        self.path = path
+        log.error('examine bundle '+path)
+        if exists(join(path, 'Contents')):
+            self.path = join(path, 'Contents')
+        else:
+            self.path = path
+            
+        log.error('using '+self.path)
         self.info_path = join(self.path, 'Info.plist')
         if not exists(self.info_path):
             raise NotMatched("no Info.plist found; probably not a bundle")
@@ -66,8 +78,11 @@ class Bundle(object):
             executable_name, _ = splitext(basename(self.path))
         executable = join(self.path, executable_name)
         if not exists(executable):
-            raise Exception(
-                'could not find executable for {0}'.format(self.path))
+            executable = join(self.path, 'MacOS', executable_name)
+            if not exists(executable):
+                raise Exception('could not find executable for {0}'.format(self.path))
+        else:
+          log.error("MacOS executable found");
         return executable
 
     def update_info_props(self, new_props):
@@ -125,7 +140,7 @@ class Bundle(object):
 
     def sign(self, signer):
         """ Sign everything in this bundle, recursively with sub-bundles """
-        # log.debug("SIGNING: %s" % self.path)
+        log.error("SIGNING: %s" % self.path)
         frameworks_path = join(self.path, 'Frameworks')
         if exists(frameworks_path):
             # log.debug("SIGNING FRAMEWORKS: %s" % frameworks_path)
@@ -241,15 +256,16 @@ class App(Bundle):
         # and then embed it into Signer?
 
         # In the typical case, we add entitlements from the pprof into the app's signature
-        if alternate_entitlements_path is None:
-            # copy the provisioning profile in
-            self.provision(provisioning_profile)
+        if 0:
+            if alternate_entitlements_path is None:
+                # copy the provisioning profile in
+                self.provision(provisioning_profile)
 
-            entitlements = self.extract_entitlements(provisioning_profile)
-        else:
-            log.info("signing with alternative entitlements: {}".format(alternate_entitlements_path))
-            entitlements = biplist.readPlist(alternate_entitlements_path)
-        self.write_entitlements(entitlements)
+                entitlements = self.extract_entitlements(provisioning_profile)
+            else:
+                log.info("signing with alternative entitlements: {}".format(alternate_entitlements_path))
+                entitlements = biplist.readPlist(alternate_entitlements_path)
+            self.write_entitlements(entitlements)
 
         # actually resign this bundle now
         super(App, self).resign(signer)

@@ -11,6 +11,7 @@ import re
 OUTPUT_DIRECTORY = '_CodeSignature'
 OUTPUT_FILENAME = 'CodeResources'
 TEMPLATE_FILENAME = 'code_resources_template.xml'
+CD_TEMPLATE_FILENAME = 'cdhashes_template.xml'
 # DIGEST_ALGORITHM = "sha1"
 HASH_BLOCKSIZE = 65536
 
@@ -91,9 +92,9 @@ class PathRule(object):
 class ResourceBuilder(object):
     NULL_PATH_RULE = PathRule()
 
-    def __init__(self, app_path, rules_data, respect_omissions=False, include_sha256=False):
+    def __init__(self, app_path, target_path, rules_data, respect_omissions=False, include_sha256=False):
         self.app_path = app_path
-        self.app_dir = os.path.dirname(app_path)
+        self.app_dir = target_path
         self.rules = []
         self.respect_omissions = respect_omissions
         self.include_sha256 = include_sha256
@@ -103,8 +104,8 @@ class ResourceBuilder(object):
     def find_rule(self, path):
         best_rule = ResourceBuilder.NULL_PATH_RULE
         for rule in self.rules:
-            # log.debug('trying rule ' + str(rule) + ' against ' + path)
             if rule.matches(path):
+                log.debug('matched rule ' + str(rule) + ' against ' + path)
                 if rule.flags and rule.is_exclusion():
                     best_rule = rule
                     break
@@ -125,30 +126,44 @@ class ResourceBuilder(object):
         """
         file_entries = {}
         # rule_debug_fmt = "rule: {0}, path: {1}, relative_path: {2}"
+        if self.include_sha256:
+            log.error("SHA256 pass");
+        
         for root, dirs, filenames in os.walk(self.app_dir):
+            log.error("ResourceBuilder scan "+root)
             # log.debug("root: {0}".format(root))
             for filename in filenames:
+                log.error("ResourceBuilder filename "+filename)
                 rule, path, relative_path = self.get_rule_and_paths(root,
                                                                     filename)
                 # log.debug(rule_debug_fmt.format(rule, path, relative_path))
 
                 # specifically ignore the CodeResources symlink in base directory if it exists (iOS 11+ fix)
                 if relative_path == "CodeResources" and os.path.islink(path):
+                    log.error("CodeResources ignored as link")
                     continue
 
+                if filename == "Info.plist":
+                    log.error("specifically ignore Info.plist")
+                    continue
+                    
                 if rule.is_exclusion():
+                    log.error("excluded by rule")
                     continue
 
                 if rule.is_omitted() and self.respect_omissions is True:
+                    log.error("excluded by is_omitted()")
                     continue
 
                 if self.app_path == path:
+                    log.error("excluded because is app!!!")
                     continue
 
                 # in the case of symlinks, we don't calculate the hash but rather add a key for it being a symlink
                 if os.path.islink(path):
                     # omit symlinks from files, leave in files2
                     if not self.respect_omissions:
+                        log.error("excluded because is link")
                         continue
                     val = {'symlink': os.readlink(path)}
                 else:
@@ -164,16 +179,20 @@ class ResourceBuilder(object):
                     file_entries[relative_path] = val['hash']
                 else:
                     file_entries[relative_path] = val
+                log.error("file included ")
 
             for dirname in dirs:
+                log.error("ResourceBuilder dir "+dirname)
                 rule, path, relative_path = self.get_rule_and_paths(root,
                                                                     dirname)
 
-                if rule.is_nested() and '.' not in path:
+                """if rule.is_nested() and '.' not in path:
+                    log.error("rule is nested - remove "+dirname)
                     dirs.remove(dirname)
-                    continue
+                    continue"""
 
                 if relative_path == OUTPUT_DIRECTORY:
+                    log.error("relative path "+relative_path+" is output directory "+OUTPUT_DIRECTORY)
                     dirs.remove(dirname)
 
         return file_entries
@@ -188,6 +207,22 @@ def get_template():
     template_path = os.path.join(current_dir, TEMPLATE_FILENAME)
     fh = open(template_path, 'r')
     return plistlib.readPlist(fh)
+
+def get_cdhashes_template():
+    """
+    Obtain the 'cdhashes template' plist which is written in the signature
+    """
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    template_path = os.path.join(current_dir, CD_TEMPLATE_FILENAME)
+    fh = open(template_path, 'r')
+    return plistlib.readPlist(fh)
+
+def set_cdhashes(list, hash1, hash2):
+    list['cdhashes'] = [plistlib.Data(hash1), plistlib.Data(hash2)]
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    template_path = os.path.join(current_dir, 'templ.xml')
+    fh = open(template_path, 'w')
+    return plistlib.writePlistToString(list)
 
 
 @memoize
@@ -239,9 +274,9 @@ def make_seal(source_app_path, target_dir=None):
     # deciding which files should be part of the seal
     rules = template['rules']
     plist = copy.deepcopy(template)
-    resource_builder = ResourceBuilder(source_app_path, rules, respect_omissions=False)
+    resource_builder = ResourceBuilder(source_app_path, target_dir, rules, respect_omissions=False)
     plist['files'] = resource_builder.scan()
     rules2 = template['rules2']
-    resource_builder2 = ResourceBuilder(source_app_path, rules2, respect_omissions=True, include_sha256=True)
+    resource_builder2 = ResourceBuilder(source_app_path, target_dir, rules2, respect_omissions=False, include_sha256=True)
     plist['files2'] = resource_builder2.scan()
     return write_plist(target_dir, plist)

@@ -6,6 +6,9 @@ import macho_cs
 
 import utils
 
+# for cdhashes template plist
+import code_resources
+
 log = logging.getLogger(__name__)
 
 
@@ -19,17 +22,37 @@ class CodeDirectorySlot(object):
         self.codesig = codesig
 
     def get_hash(self, hash_algorithm):
+        content = self.get_contents();
         if hash_algorithm == "sha1":
-            return hashlib.sha1(self.get_contents()).digest()
+            if not content:
+                actual = '\x00' * 20
+            else:
+                actual = hashlib.sha1(self.get_contents()).digest()
+            log.debug("codedirectory hash "+actual.encode('hex'))
         elif hash_algorithm == "sha256":
-            return hashlib.sha256(self.get_contents()).digest()
+            if not content:
+                actual = '\x00' * 32
+            else:
+                actual = hashlib.sha256(self.get_contents()).digest()
+            log.debug("codedirectory hash "+actual.encode('hex'))
+        else:
+            if not content:
+                actual = '\x00' * 20
+            else:
+                actual = hashlib.sha1(self.get_contents()).digest()
+            log.debug("codedirectory hash algorithm bad? used sha1 "+actual.encode('hex'))
+            
+        return actual
 
 
 class EntitlementsSlot(CodeDirectorySlot):
     offset = -5
 
     def get_contents(self):
-        blobs = self.codesig.get_blobs('CSMAGIC_ENTITLEMENT', min_expected=1, max_expected=1)
+        """blobs = self.codesig.get_blobs('CSMAGIC_ENTITLEMENT', min_expected=0, max_expected=1)"""
+        blobs = self.codesig.get_blobs('CSMAGIC_ENTITLEMENT', min_expected=0, max_expected=1)
+        if not blobs:
+            return 0;
         return self.codesig.get_blob_data(blobs[0])
 
 
@@ -37,8 +60,12 @@ class ApplicationSlot(CodeDirectorySlot):
     offset = -4
 
     def get_hash(self, hash_algorithm):
-        return '\x00' * 20
-
+        if hash_algorithm == "sha1":
+            actual = '\x00' * 20
+        elif hash_algorithm == "sha256":
+            actual = '\x00' * 32
+        log.debug("codedirectory hash "+actual.encode('hex'))
+        return actual
 
 class ResourceDirSlot(CodeDirectorySlot):
     offset = -3
@@ -204,7 +231,13 @@ class Codesig(object):
 
         for i, code_directory in enumerate(cd):
             # TODO: Is there a better way to figure out which hashing algorithm we should use?
-            hash_algorithm = 'sha256' if i > 0 else 'sha1'
+            if code_directory.data.hashSize == 32:
+                hash_algorithm = 'sha256'
+                log.debug("set_codedirectories using sha256")
+            else:
+                hash_algorithm = 'sha1'
+                log.debug("set_codedirectories using sha1")
+            #hash_algorithm = 'sha256' if i > 0 else 'sha1'
 
             if self.has_codedirectory_slot(EntitlementsSlot, code_directory):
                 self.fill_codedirectory_slot(EntitlementsSlot(self), code_directory, hash_algorithm)
@@ -221,7 +254,10 @@ class Codesig(object):
             if self.has_codedirectory_slot(InfoSlot, code_directory):
                 self.fill_codedirectory_slot(InfoSlot(info_path), code_directory, hash_algorithm)
 
-            code_directory.data.teamID = signer.team_id
+            if not signer.team_id:
+                code_directory.data.teamID = '\00'
+            else:
+                code_directory.data.teamID = signer.team_id
 
             if changed_bundle_id:
                 offset_change = len(changed_bundle_id) - len(code_directory.data.ident)
@@ -253,12 +289,31 @@ class Codesig(object):
 
         code_directories = self.get_blobs('CSMAGIC_CODEDIRECTORY', min_expected=1, max_expected=2)
         cd_data = self.get_blob_data(code_directories[0])
-        sig = signer.sign(cd_data, 'sha1')
-        # log.debug("sig len: {0}".format(len(sig)))
+        log.debug("got cd_data len {}".format(len(cd_data)))
+        cd_data2 = self.get_blob_data(code_directories[1])
+        log.debug("got cd_data2 len {}".format(len(cd_data2)))
+        
+        
+        hash1 = hashlib.sha1(cd_data).digest()
+        log.debug("cd_data hashsha1 "+hash1.encode('hex')+" "+hash1.encode('base64'))
+        hash2 = hashlib.sha256(cd_data2).digest()
+        log.debug("cd_data2 hashsha256 "+hash2.encode('hex')+" "+hash2.encode('base64'))
+        log.debug("cd_data2 cutdown hashsha256 "+hash2[0:20].encode('hex')+" "+hash2[0:20].encode('base64'))
+        
+        cdhashesxml = code_resources.get_cdhashes_template();
+        cdhashesstring = code_resources.set_cdhashes(cdhashesxml, hash1, hash2[0:20]);
+        log.debug("cdhashes xml "+cdhashesstring);
+        
+        
+        """sig = signer.sign(cd_data, 'sha1')"""
+        sig = signer.sign(cd_data, 'sha256')
+        #sig2 = signer.sign(cd_data2, 'sha256')
+        
+        log.debug("sig len: {0}".format(len(sig)))
         # log.debug("old sig len: {0}".format(len(oldsig)))
         # open("my_sigrip.der", "wb").write(sig)
         sigwrapper.data = construct.Container(data=sig)
-        # signer._log_parsed_asn1(sig)
+        signer._log_parsed_asn1(sig)
         # sigwrapper.data = construct.Container(data="hahaha")
         sigwrapper.length = len(sigwrapper.data.data) + 8
         sigwrapper.bytes = sigwrapper.data.data

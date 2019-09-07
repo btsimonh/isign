@@ -32,7 +32,7 @@ def openssl_command(args, data=None, expect_err=False):
         for that with the expect_err param. """
     cmd = [OPENSSL] + args
     cmd_str = ' '.join(cmd)
-    # log.debug('running command ' + cmd_str)
+    log.debug('running command ' + cmd_str)
     proc = subprocess.Popen(cmd,
                             stdin=subprocess.PIPE,
                             stderr=subprocess.PIPE,
@@ -95,12 +95,16 @@ class Signer(object):
                 log.warn(msg)
                 raise MissingCredentials(msg)
         self.signer_key_file = signer_key_file
+        
         self.signer_cert_file = signer_cert_file
         self.apple_cert_file = apple_cert_file
         team_id = self._get_team_id()
         if team_id is None:
-            raise ImproperCredentials("Cert file does not contain Subject line"
+            log.error("Cert file does not contain Subject line"
                                       "with Apple Organizational Unit (OU)")
+            
+            """raise ImproperCredentials("Cert file does not contain Subject line"
+                                      "with Apple Organizational Unit (OU)")"""
         self.team_id = team_id
         self.check_openssl_version()
 
@@ -137,13 +141,17 @@ class Signer(object):
         """ read in our cert, and get our Common Name """
         with open(self.signer_cert_file, 'rb') as fh:
             cert = crypto.load_certificate(crypto.FILETYPE_PEM, fh.read())
+            log.debug("cert file dump "+crypto.dump_certificate(crypto.FILETYPE_TEXT, cert))
         subject = cert.get_subject()
         return dict(subject.get_components())['CN']
 
     def _log_parsed_asn1(self, data):
-        cmd = ['asn1parse', '-inform', 'DER' '-i']
-        parsed_asn1 = openssl_command(cmd)
-        log.debug(parsed_asn1)
+        pkcs7 = crypto.load_pkcs7_data(crypto.FILETYPE_ASN1, data)
+        log.debug("output dump {}".format(pkcs7))
+    
+        #cmd = ['asn1parse', '-inform', 'DER' '-i']
+        #parsed_asn1 = openssl_command(cmd)
+        #log.debug(parsed_asn1)
 
     def _get_team_id(self):
         """ Same as Apple Organizational Unit. Should be in the cert """

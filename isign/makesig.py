@@ -14,6 +14,7 @@ import math
 import macho
 import macho_cs
 import utils
+from os.path import basename, exists, join, splitext
 
 
 log = logging.getLogger(__name__)
@@ -104,11 +105,16 @@ def make_requirements(drs, ident, common_name):
     return reqs
 
 
-def make_basic_codesig(entitlements_file, drs, code_limit, hashes, signer, ident):
+def make_basic_codesig(entitlements_file, drs, code_limit, hashes, hashes256, signer, ident):
     common_name = signer.get_common_name()
     log.debug("ident: {}".format(ident))
     log.debug("codelimit: {}".format(code_limit))
-    teamID = signer._get_team_id() + '\x00'
+    team = signer._get_team_id();
+    if team is None:
+        teamID = '\x00'
+    else:
+        teamID = team + '\x00'
+    
     empty_hash = "\x00" * 20
     cd = construct.Container(cd_start=None,
                              version=0x20200,
@@ -153,8 +159,45 @@ def make_basic_codesig(entitlements_file, drs, code_limit, hashes, signer, ident
                                                                       ))
     offset += requirements_index.blob.length
 
+    
+    empty_hash = "\x00" * 32
+    cd2 = construct.Container(cd_start=None,
+                             version=0x20200,
+                             flags=0,
+                             identOffset=52,
+                             nSpecialSlots=5,
+                             nCodeSlots=len(hashes256),
+                             codeLimit=code_limit,
+                             hashSize=32,
+                             hashType=2,
+                             spare1=0,
+                             pageSize=12,
+                             spare2=0,
+                             ident=ident + '\x00',
+                             scatterOffset=0,
+                             teamIDOffset=52 + len(ident) + 1,
+                             teamID=teamID,
+                             hashOffset=52 + (32 * 5) + len(ident) + 1 + len(teamID),
+                             hashes=([empty_hash] * 5) + hashes256,
+                             )
+
+    cd2_data = macho_cs.CodeDirectory.build(cd2)
+
+    #offset += 44 #???????
+    cd2_index = construct.Container(type=0x1000,
+                                   offset=offset,
+                                   blob=construct.Container(magic='CSMAGIC_CODEDIRECTORY',
+                                                            length=len(cd2_data) + 8,
+                                                            data=cd2,
+                                                            bytes=cd2_data,
+                                                            ))
+
+    offset += cd2_index.blob.length
+    
+    
+    
     entitlements_index = None
-    if entitlements_file != None:
+    if entitlements_file != None and exists(entitlements_file):
         entitlements_bytes = open(entitlements_file, "rb").read()
         entitlements_index = construct.Container(type=5,
                                                  offset=offset,
@@ -175,6 +218,7 @@ def make_basic_codesig(entitlements_file, drs, code_limit, hashes, signer, ident
     indicies = filter(None, [cd_index,
                 requirements_index,
                 entitlements_index,
+                cd2_index,
                 sigwrapper_index])
 
     superblob = construct.Container(
@@ -214,11 +258,13 @@ def make_signature(arch_macho, arch_offset, arch_size, cmds, f, entitlements_fil
 
     # generate placeholder LC_CODE_SIGNATURE (like what codesign_allocate does)
     fake_hashes = ["\x00" * 20]*nCodeSlots
+    fake_hashes256 = ["\x00" * 32]*nCodeSlots
 
     codesig_cons = make_basic_codesig(entitlements_file,
             drs,
             codeLimit,
             fake_hashes,
+            fake_hashes256,
             signer,
             ident)
     codesig_data = macho_cs.Blob.build(codesig_cons)
@@ -247,6 +293,7 @@ def make_signature(arch_macho, arch_offset, arch_size, cmds, f, entitlements_fil
     arch_macho.commands.append(cmd)
 
     hashes = []
+    hashes256 = []
     if codesig_data_length > 0:
         # Patch __LINKEDIT
         for lc in arch_macho.commands:
@@ -284,14 +331,19 @@ def make_signature(arch_macho, arch_offset, arch_size, cmds, f, entitlements_fil
             actual = hashlib.sha1(actual_data_slice).digest()
             log.debug("Slot {} (File page @{}): {}".format(i, hex(0x1000 * i), actual.encode('hex')))
             hashes.append(actual)
+            actual = hashlib.sha256(actual_data_slice).digest()
+            log.debug("256 Slot {} (File page @{}): {}".format(i, hex(0x1000 * i), actual.encode('hex')))
+            hashes256.append(actual)
     else:
         hashes = fake_hashes
+        hashes256 = fake_hashes256
 
     # Replace placeholder with real one.
     codesig_cons = make_basic_codesig(entitlements_file,
             drs,
             codeLimit,
             hashes,
+            hashes256,
             signer,
             ident)
     codesig_data = macho_cs.Blob.build(codesig_cons)

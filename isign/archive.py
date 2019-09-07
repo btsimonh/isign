@@ -120,6 +120,11 @@ class AppArchive(Archive):
     def find_bundle_dir(cls, path):
         """ Included for similarity with the zipped archive classes. In this case, the bundle dir
             *is* the directory """
+        if exists(join(path, 'Contents')):
+            path = join(path, 'Contents')
+        else:
+            path = path
+            
         return path
 
     @classmethod
@@ -132,13 +137,17 @@ class AppArchive(Archive):
 
     @classmethod
     def precheck(cls, path):
+        log.error('AppBundle precheck '+path)
+
         if not isdir(path):
+            log.error('not path '+path)
             return False
         if not os.path.exists(cls._get_plist_path(path)):
+            log.error('no Info.plist in '+path)
             return False
         plist = cls.get_info(path)
         is_native = is_info_plist_native(plist)
-        log.debug("is_native: {}".format(is_native))
+        log.error("is_native: {}".format(is_native))
         return is_native
 
     @classmethod
