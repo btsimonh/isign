@@ -1,6 +1,28 @@
-isign
-=====
+isign - adapted for MacOS app bundles
+=====================================
 
+This version is hacked about to sign for MacOS.
+Base on https://github.com/apperian/isign.git (a random choice)
+
+It worked quite well with a self signed cert, but when I got a real developer ID cert, the apple signature changed...
+
+This code produces the structures correctly, including SHA256 hashes for a 2nd code directory, plus
+an XML to be included in the new signature. (thanks to http://gary-nebbett.blogspot.com/2016/03/re-signing-apple-apps-under-windows.html )
+But it needs work to make the actual signature match that produced by codesign.
+
+Todo:
+The signature itself needs to have timestamps added as unsigned parts, and to have a custom section
+OID = 1.2.840.113635.100.9.1
+containing the new XML.
+
+This is difficult with python's OpenSSL library access...
+Current output causes codesign verify to blow up.
+
+See Notes folder for some development notes.
+
+
+Original readme
+===============
 A tool and library to re-sign iOS applications, without proprietary Apple software.
 
 For example, an iOS app in development would probably only run on the developer's iPhone. 
